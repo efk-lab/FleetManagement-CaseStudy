@@ -86,3 +86,10 @@ Kubernetes
   
 - Kubernetes Dashboard
   > minikube dasboard
+  
+- Prometheus&Grafana
+  > kubectl create namespace monitoring
+  
+  > helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+  
+  > helm install k8spromethuesstack --namespace monitoring prometheus-community/kube-prometheus-stack
