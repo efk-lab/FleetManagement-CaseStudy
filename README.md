@@ -60,3 +60,26 @@ Kubernetes
    
   - ShipmentStateController : Restfull Service for shipment state operations.
     - getShipmentState
+
+# Deployment
+
+- Install minikube
+  - https://minikube.sigs.k8s.io/docs/start/
+    
+- Install Kafka
+   >helm install my-release oci://registry-1.docker.io/bitnamicharts/kafka
+   
+- Build Images
+  > docker build -t fleetmanager:latest -f /eclipse-workspace/FleetManager/src/main/resources/Dockerfile .
+  > docker build -t vehiclemanager:latest -f /eclipse-workspace/VehicleManager/src/main/resources/Dockerfile .
+  > docker build -t customermanager:latest -f /eclipse-workspace/CustomerManager/src/main/resources/Dockerfile .
+  > eval $(minikube docker-env)
+  
+- Deploy Applications
+  > kubectl apply -f fleetmanagement.yaml
+  
+- For loadbanacer run command below
+  > minikube tunnel
+  
+- Kubernetes Dashboard
+  > minikube dasboard
