@@ -287,7 +287,7 @@ spec:
     spec:
       containers:
       - name: fleetmanager
-        image: eftmk/fleetmanager:latest
+        image: fleetmanager:latest
         imagePullPolicy: Never
         ports:
           - containerPort: 8081
@@ -682,7 +682,7 @@ spec:
     spec:
       containers:
       - name: vehiclemanager
-        image: eftmk/vehiclemanager:latest
+        image: vehiclemanager:latest
         imagePullPolicy: Never
         ports:
           - containerPort: 8082
@@ -1092,7 +1092,7 @@ spec:
     spec:
       containers:
       - name: customermanager
-        image: eftmk/customermanager:latest
+        image: customermanager:latest
         imagePullPolicy: Never
         ports:
           - containerPort: 8083
