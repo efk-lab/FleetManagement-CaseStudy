@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="DEBUG">
+	<Appenders>
+		<RollingFile name="RollingFileAppender"
+			fileName="/mnt/k8s/log/customermanager.log"
+			filePattern="/mnt/k8s/log/$${date:yyyy-MM}/customermanager-%d{MM-dd-yyyy}-%i.log.gz">
+			<PatternLayout>
+				<Pattern>%d %p %c{1.} [%t] %m%n</Pattern>
+			</PatternLayout>
+			<Policies>
+				<TimeBasedTriggeringPolicy />
+				<SizeBasedTriggeringPolicy size="10 MB" />
+			</Policies>
+		</RollingFile>
+
+		<Console name="ConsoleAppender" target="SYSTEM_OUT">
+			<PatternLayout
+				pattern="%d [%t] %-5level %logger{36} - %msg%n%throwable" />
+		</Console>
+
+	</Appenders>
+	<Loggers>
+		<Logger name="com.mycomp" level="debug" additivity="false">
+			<AppenderRef ref="ConsoleAppender" />
+		</Logger>
+
+		<Logger name="com.mycomp" level="debug" additivity="false">
+			<AppenderRef ref="RollingFileAppender" />
+		</Logger>
+		<Root level="debug">
+			<AppenderRef ref="ConsoleAppender" />
+		</Root>
+	</Loggers>
+</Configuration>
