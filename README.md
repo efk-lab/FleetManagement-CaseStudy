@@ -71,8 +71,11 @@ Kubernetes
    
 - Build Images
   > docker build -t fleetmanager:latest -f /eclipse-workspace/FleetManager/src/main/resources/Dockerfile .
+  
   > docker build -t vehiclemanager:latest -f /eclipse-workspace/VehicleManager/src/main/resources/Dockerfile .
+  
   > docker build -t customermanager:latest -f /eclipse-workspace/CustomerManager/src/main/resources/Dockerfile .
+  
   > eval $(minikube docker-env)
   
 - Deploy Applications
