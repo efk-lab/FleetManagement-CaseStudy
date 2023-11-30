@@ -1,0 +1,1235 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fleetmanager-k8s
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-fleetmanager-configmap
+  namespace: fleetmanager-k8s
+data:
+  database_url: mongodb-fleetmanager-service
+  mongo-root-username: user
+  mongo-root-authdb: admin
+  mongo-database: test
+  auto-index-creation: "true"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongodb-fleetmanager-secret
+  namespace: fleetmanager-k8s
+type: Opaque
+stringData:
+  mongo-root-password: user
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-fleetmanager-service
+  namespace: fleetmanager-k8s
+spec:
+  selector:
+    app: mongodb-fleetmanager
+  ports:
+    - protocol: TCP
+      port: 27017
+      targetPort: 27017
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-fleetmanager-deployment
+  namespace: fleetmanager-k8s
+  labels:
+    app: mongodb-fleetmanager
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 2
+  selector:
+    matchLabels:
+      app: mongodb-fleetmanager
+  template:
+    metadata:
+      labels:
+        app: mongodb-fleetmanager
+    spec:
+      containers:
+      - name: mongodb-fleetmanager
+        image: mongo
+        ports:
+          - containerPort: 27017   
+        env:
+          - name: MONGO_INITDB_ROOT_USERNAME
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-fleetmanager-configmap
+                key: mongo-root-username
+          - name: MONGO_INITDB_ROOT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: mongodb-fleetmanager-secret
+                key: mongo-root-password
+        volumeMounts:
+          - mountPath: fleetmanager/data/db
+            name: mongo-fleetmanager-pv
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+      volumes:
+        - name: mongo-fleetmanager-pv
+          persistentVolumeClaim:
+            claimName: mongo-fleetmanager-pvc
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mongo-fleetmanager-pv
+  namespace: fleetmanager-k8s
+  labels:
+    app: mongodb-fleetmanager
+spec:
+  capacity:
+    storage: 20Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Recycle
+  storageClassName: standard
+  hostPath:
+    path: /mnt/k8s/mongo
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongo-fleetmanager-pvc
+  namespace: fleetmanager-k8s
+spec:
+  resources:
+    requests:
+      storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  selector:
+    matchLabels: 
+      app: mongodb-fleetmanager
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: redis-fleetmanager-pv
+  namespace: fleetmanager-k8s
+spec:
+  capacity:
+    storage: 50Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Recycle
+  hostPath:
+   path: /data/redis
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-fleetmanager-pvc
+  namespace: fleetmanager-k8s
+spec:
+  storageClassName: ""
+  resources:
+    requests:
+       storage: 50Gi
+  volumeMode: Filesystem
+  volumeName: redis-fleetmanager-pv
+  accessModes:
+    - ReadWriteOnce
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: fleetmanager-k8s
+  labels:
+    app: redis-fleetmanager-deployment 
+  name: redis-fleetmanager-service
+spec:
+  ports:
+  - port: 6379
+    targetPort: 6379
+    protocol: TCP
+    nodePort: 32666
+  selector:
+    app: redis-fleetmanager-deployment
+  type: NodePort
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: fleetmanager-k8s
+  labels:
+    app: redis-fleetmanager-deployment
+  name: redis-fleetmanager-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-fleetmanager-deployment
+  template:
+    metadata:
+      labels:
+        app: redis-fleetmanager-deployment
+    spec:
+      containers:
+      - image: redis/redis-stack:latest
+        name: redis
+        command: ["redis-server"]
+        args: ["--replica-announce-ip svc-redis-instance-1", "--requirepass root", 
+        "--loadmodule /opt/redis-stack/lib/redisearch.so" , "--loadmodule /opt/redis-stack/lib/rejson.so",
+        "--loadmodule /opt/redis-stack/lib/redistimeseries.so", "--loadmodule /opt/redis-stack/lib/redisbloom.so", 
+        "--save 10 1", "--appendonly yes", "--dir ./data"]
+        volumeMounts:
+        - name: "redis-fleetmanager-pvc"
+          mountPath: "/data"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"           
+      volumes:
+      - name: "redis-fleetmanager-pvc"
+        persistentVolumeClaim:
+          claimName: "redis-fleetmanager-pvc"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fleetmanager-configmap
+  namespace: fleetmanager-k8s
+data:
+  security-jwt-clientid: FleetManagerClient
+  security-jwt-accesstokenvaliditityseconds: "43200"
+  security-jwt-authorizedgranttypes: password,authorization_code,refresh_token,client_credentials
+  security-jwt-refreshtokenvalidityseconds: "2592000"
+  redis-host: redis-fleetmanager-service.fleetmanager-k8s
+  redis-port: "6379"
+  redis-database: "0"
+  redis-timeout: "60000"
+  redis-pool-max-active: "8"
+  redis-pool-max-idle: "8"
+  redis-pool-min-idle: "0"
+  kafka-consumer-topic-name: vehiclelocation
+  kafka-consumer-group-id: vehiclelocation
+  kafka-producer-topic-name: shipmentevent
+  admin-user-email: admin@fleetmanager.com
+  system-user-email: system@fleetmanager.com
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fleetmanager-secret
+  namespace: fleetmanager-k8s
+type: Opaque
+stringData:
+  security-jwt-clientsecret: secret
+  security-jwt-signingkey: "123"
+  redis-password: root
+  admin-user-password: admin123
+  system-user-password: system123
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleetmanager-service
+  namespace: fleetmanager-k8s
+  labels:
+     app: fleetmanager
+spec:
+  selector:
+    app: fleetmanager
+  type: LoadBalancer
+  ports:
+    - protocol: TCP
+      port: 8081
+      targetPort: 8081
+      nodePort: 32577
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleetmanager-deployment
+  namespace: fleetmanager-k8s
+  labels:
+    app: fleetmanager
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: fleetmanager
+  template:
+    metadata:
+      labels:
+        app: fleetmanager
+    spec:
+      containers:
+      - name: fleetmanager
+        image: eftmk/fleetmanager:latest
+        imagePullPolicy: Never
+        ports:
+          - containerPort: 8081
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+        volumeMounts:
+          - mountPath: /mnt/k8s/log
+            name: fleetmanager-pv
+        env:
+          - name: CONFIG_MONGODB_USERNAME
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-fleetmanager-configmap
+                key: mongo-root-username
+          - name: CONFIG_MONGODB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: mongodb-fleetmanager-secret
+                key: mongo-root-password
+          - name: CONFIG_MONGODB_AUTH_DB
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-fleetmanager-configmap
+                key: mongo-root-authdb
+          - name: CONFIG_MONGODB_SERVER
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-fleetmanager-configmap
+                key: database_url
+          - name: CONFIG_MONGODB_AUTO_INDEX_CREATION
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-fleetmanager-configmap
+                key: auto-index-creation
+          - name: CONFIG_KAFKA_BOOTSTRAP_SERVERS
+            #value: kafka.default.svc.cluster.local:9092
+            value: fleet-management-kafka.default.svc.cluster.local:9092
+          - name: CONFIG_KAFKA_CONSUMER_TOPIC_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: kafka-consumer-topic-name
+          - name: CONFIG_KAFKA_CONSUMER_GROUP_ID
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: kafka-consumer-group-id
+          - name: CONFIG_KAFKA_PRODUCER_TOPIC_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: kafka-producer-topic-name
+          - name: CONFIG_SECURITY_JWT_CLIENTID
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: security-jwt-clientid
+          - name: CONFIG_SECURITY_JWT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: fleetmanager-secret
+                key: security-jwt-clientsecret
+          - name: CONFIG_SECURITY_JWT_SIGNINGKEY
+            valueFrom:
+              secretKeyRef:
+                name: fleetmanager-secret
+                key: security-jwt-signingkey
+          - name: CONFIG_SECURITY_JWT_ACCESSTOKEN_VALIDITYSECONDS
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: security-jwt-accesstokenvaliditityseconds
+          - name: CONFIG_SECURITY_JWT_AUTHORIZED_GRANTTYPES
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: security-jwt-authorizedgranttypes
+          - name: CONFIG_SECURITY_JWT_REFERSHTOKEN_VALIDITYSECONDS
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: security-jwt-refreshtokenvalidityseconds
+          - name: CONFIG_REDIS_HOST
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: redis-host
+          - name: CONFIG_REDIS_PORT
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: redis-port
+          - name: CONFIG_REDIS_DATABASE
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: redis-database
+          - name: CONFIG_REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: fleetmanager-secret
+                key: redis-password
+          - name: CONFIG_REDIS_TIMEOUT
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: redis-timeout
+          - name: CONFIG_REDIS_POOL_MAX_ACTIVE
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: redis-pool-max-active
+          - name: CONFIG_REDIS_POOL_MAX_IDLE
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: redis-pool-max-idle
+          - name: CONFIG_REDIS_POOL_MIN_IDLE
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: redis-pool-min-idle
+          - name: CONFIG_ADMIN_USER_EMAIL
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: admin-user-email
+          - name: CONFIG_ADMIN_USER_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: fleetmanager-secret
+                key: admin-user-password
+          - name: CONFIG_SYSTEM_USER_EMAIL
+            valueFrom:
+              configMapKeyRef:
+                name: fleetmanager-configmap
+                key: system-user-email
+          - name: CONFIG_SYSTEM_USER_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: fleetmanager-secret
+                key: system-user-password
+      volumes:
+        - name: fleetmanager-pv
+          persistentVolumeClaim:
+            claimName: fleetmanager-pvc
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: fleetmanager-pv
+  namespace: fleetmanager-k8s
+  labels:
+    app: fleetmanager
+spec:
+  capacity:
+    storage: 20Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Recycle
+  storageClassName: standard
+  hostPath:
+    path: /mnt/k8s/log
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fleetmanager-pvc
+  namespace: fleetmanager-k8s
+spec:
+  resources:
+    requests:
+      storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  selector:
+    matchLabels: 
+      app: fleetmanager
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vehiclemanager-k8s
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-vehiclemanager-configmap
+  namespace: vehiclemanager-k8s
+data:
+  database_url: mongodb-vehiclemanager-service
+  mongo-root-username: user
+  mongo-root-authdb: admin
+  mongo-database: test
+  auto-index-creation: "true"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongodb-vehiclemanager-secret
+  namespace: vehiclemanager-k8s
+type: Opaque
+stringData:
+  mongo-root-password: user
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-vehiclemanager-service
+  namespace: vehiclemanager-k8s
+spec:
+  selector:
+    app: mongodb-vehiclemanager
+  ports:
+    - protocol: TCP
+      port: 27017
+      targetPort: 27017
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-vehiclemanager-deployment
+  namespace: vehiclemanager-k8s
+  labels:
+    app: mongodb-vehiclemanager
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 2
+  selector:
+    matchLabels:
+      app: mongodb-vehiclemanager
+  template:
+    metadata:
+      labels:
+        app: mongodb-vehiclemanager
+    spec:
+      containers:
+      - name: mongodb-vehiclemanager
+        image: mongo
+        ports:
+          - containerPort: 27017  
+        env:
+          - name: MONGO_INITDB_ROOT_USERNAME
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-vehiclemanager-configmap
+                key: mongo-root-username
+          - name: MONGO_INITDB_ROOT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: mongodb-vehiclemanager-secret
+                key: mongo-root-password
+        volumeMounts:
+          - mountPath: vehiclemanager/data/db
+            name: mongo-vehiclemanager-pv
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+      volumes:
+        - name: mongo-vehiclemanager-pv
+          persistentVolumeClaim:
+            claimName: mongo-vehiclemanager-pvc
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mongo-vehiclemanager-pv
+  namespace: vehiclemanager-k8s
+  labels:
+    app: mongodb-vehiclemanager
+spec:
+  capacity:
+    storage: 20Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Recycle
+  storageClassName: standard
+  hostPath:
+    path: /mnt/k8s/mongo
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongo-vehiclemanager-pvc
+  namespace: vehiclemanager-k8s
+spec:
+  resources:
+    requests:
+      storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  selector:
+    matchLabels: 
+      app: mongodb-vehiclemanager
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vehiclemanager-configmap
+  namespace: vehiclemanager-k8s
+data:
+  circuitBreakerId: fleetmanagerCircuitBreaker
+  circuitBreakerTimeoutDuration: "4"
+  circuitBreakerFailureRateThreshold: "50"
+  circuitBreakerWaitDurationInOpenState: "1000"
+  circuitBreakerSlidingWindowSize: "2"
+  security-jwt-clientid: VehicleManagerClient
+  security-jwt-accesstokenvaliditityseconds: "43200"
+  security-jwt-authorizedgranttypes: password,authorization_code,refresh_token,client_credentials
+  security-jwt-refreshtokenvalidityseconds: "2592000"
+  security-oauth2-client-clientId: FleetManagerClient
+  security-oauth2-client-accessToken-uri: http://fleetmanager-service.fleetmanager-k8s:8081/oauth/token
+  security-oauth2-client-scope: write
+  security-oauth2-client-grantType: password
+  security-oauth2-client-userName: system@fleetmanager.com
+  security-oauth2-client-resourceId: FleetManagerResource
+  security-oauth2-client-tokenName: FleetManagerToken
+  kafka-producer-topic-name: vehiclelocation
+  fleetmanager-vehicleservice-getvehicle-url: http://fleetmanager-service.fleetmanager-k8s:8081/fleetmanager/vehicle/details
+  fleetmanager-distributionservice-getdistribution-url: http://fleetmanager-service.fleetmanager-k8s:8081/fleetmanager/distribution/details
+  admin-user-email: admin@vehiclemanager.com
+  system-user-email: system@vehiclemanager.com
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vehiclemanager-secret
+  namespace: vehiclemanager-k8s
+type: Opaque
+stringData:
+  security-jwt-clientsecret: secret
+  security-jwt-signingkey: "123"
+  security-oauth2-client-clientSecret: secret
+  security-oauth2-client-password: system123
+  admin-user-password: admin123
+  system-user-password: system123
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vehiclemanager-service
+  namespace: vehiclemanager-k8s
+  labels:
+     app: vehiclemanager
+spec:
+  selector:
+    app: vehiclemanager
+  type: LoadBalancer
+  ports:
+    - protocol: TCP
+      port: 8082
+      targetPort: 8082
+      nodePort: 32588
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vehiclemanager-deployment
+  namespace: vehiclemanager-k8s
+  labels:
+    app: vehiclemanager
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: vehiclemanager
+  template:
+    metadata:
+      labels:
+        app: vehiclemanager
+    spec:
+      containers:
+      - name: vehiclemanager
+        image: eftmk/vehiclemanager:latest
+        imagePullPolicy: Never
+        ports:
+          - containerPort: 8082
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+        volumeMounts:
+          - mountPath: /mnt/k8s/log
+            name: vehiclemanager-pv
+        env:
+          - name: CONFIG_MONGODB_USERNAME
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-vehiclemanager-configmap
+                key: mongo-root-username
+          - name: CONFIG_MONGODB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: mongodb-vehiclemanager-secret
+                key: mongo-root-password
+          - name: CONFIG_MONGODB_AUTH_DB
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-vehiclemanager-configmap
+                key: mongo-root-authdb
+          - name: CONFIG_MONGODB_SERVER
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-vehiclemanager-configmap
+                key: database_url
+          - name: CONFIG_MONGODB_AUTO_INDEX_CREATION
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-vehiclemanager-configmap
+                key: auto-index-creation
+          - name: CONFIG_KAFKA_BOOTSTRAP_SERVERS
+            #value: kafka.default.svc.cluster.local:9092
+            value: fleet-management-kafka.default.svc.cluster.local:9092
+          - name: CONFIG_KAFKA_PRODUCER_TOPIC_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: kafka-producer-topic-name
+          - name: CONFIG_SECURITY_JWT_CLIENTID
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: security-jwt-clientid
+          - name: CONFIG_SECURITY_JWT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: vehiclemanager-secret
+                key: security-jwt-clientsecret
+          - name: CONFIG_SECURITY_JWT_SIGNINGKEY
+            valueFrom:
+              secretKeyRef:
+                name: vehiclemanager-secret
+                key: security-jwt-signingkey
+          - name: CONFIG_SECURITY_JWT_ACCESSTOKEN_VALIDITYSECONDS
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: security-jwt-accesstokenvaliditityseconds
+          - name: CONFIG_SECURITY_JWT_AUTHORIZED_GRANTTYPES
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: security-jwt-authorizedgranttypes
+          - name: CONFIG_SECURITY_JWT_REFERSHTOKEN_VALIDITYSECONDS
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: security-jwt-refreshtokenvalidityseconds
+          - name: CONFIG_CIRCUIT_BREAKER_ID
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: circuitBreakerId
+          - name: CONFIG_CIRCUIT_BREAKER_TIMEOUT_DURATION
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: circuitBreakerTimeoutDuration
+          - name: CONFIG_CIRCUIT_BREAKER_FAILURE_RATE_TRESHHOLD
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: circuitBreakerFailureRateThreshold
+          - name: CONFIG_CIRCUIT_BREAKER_WAIT_DURATION_IN_OPEN_STATE
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: circuitBreakerWaitDurationInOpenState
+          - name: CONFIG_CIRCUIT_BREAKER_SLIDING_WINDOW_SIZE
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: circuitBreakerSlidingWindowSize
+          - name: CONFIG_SECURITY_OAUTH2_CLIENT_CLIENTID
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: security-oauth2-client-clientId
+          - name: CONFIG_SECURITY_OAUTH2_CLIENT_CLIENTSECRET
+            valueFrom:
+              secretKeyRef:
+                name: vehiclemanager-secret
+                key: security-oauth2-client-clientSecret
+          - name: CONFIG_SECURITY_OAUTH2_CLIENT_ACCESSTOKEN_URI
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: security-oauth2-client-accessToken-uri
+          - name: CONFIG_SECURITY_OAUTH2_CLIENT_SCOPE
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: security-oauth2-client-scope
+          - name: CONFIG_SECURITY_OAUTH2_CLIENT_GRANTTYPE
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: security-oauth2-client-grantType
+          - name: CONFIG_SECURITY_OAUTH2_CLIENT_USERNAME
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: security-oauth2-client-userName
+          - name: CONFIG_SECURITY_OAUTH2_CLIENT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: vehiclemanager-secret
+                key: security-oauth2-client-password
+          - name: CONFIG_SECURITY_OAUTH2_CLIENT_RESOURCEID
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: security-oauth2-client-resourceId
+          - name: CONFIG_SECURITY_OAUTH2_CLIENT_TOKENNAME
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: security-oauth2-client-tokenName
+          - name: CONFIG_REMOTE_FLEETMANAGER_GETVEHICLE_URL
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: fleetmanager-vehicleservice-getvehicle-url
+          - name: CONFIG_REMOTE_FLEETMANAGER_GETDISTRIBUTION_URL
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: fleetmanager-distributionservice-getdistribution-url
+          - name: CONFIG_ADMIN_USER_EMAIL
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: admin-user-email
+          - name: CONFIG_ADMIN_USER_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: vehiclemanager-secret
+                key: admin-user-password
+          - name: CONFIG_SYSTEM_USER_EMAIL
+            valueFrom:
+              configMapKeyRef:
+                name: vehiclemanager-configmap
+                key: system-user-email
+          - name: CONFIG_SYSTEM_USER_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: vehiclemanager-secret
+                key: system-user-password
+      volumes:
+        - name: vehiclemanager-pv
+          persistentVolumeClaim:
+            claimName: vehiclemanager-pvc
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vehiclemanager-pv
+  namespace: vehiclemanager-k8s
+  labels:
+    app: vehiclemanager
+spec:
+  capacity:
+    storage: 20Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Recycle
+  storageClassName: standard
+  hostPath:
+    path: /mnt/k8s/log
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vehiclemanager-pvc
+  namespace: vehiclemanager-k8s
+spec:
+  resources:
+    requests:
+      storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  selector:
+    matchLabels: 
+      app: vehiclemanager
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: customermanager-k8s
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-customermanager-configmap
+  namespace: customermanager-k8s
+data:
+  database_url: mongodb-customermanager-service
+  mongo-root-username: user
+  mongo-root-authdb: admin
+  mongo-database: test
+  auto-index-creation: "true"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongodb-customermanager-secret
+  namespace: customermanager-k8s
+type: Opaque
+stringData:
+  mongo-root-password: user
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-customermanager-service
+  namespace: customermanager-k8s
+spec:
+  selector:
+    app: mongodb-customermanager
+  ports:
+    - protocol: TCP
+      port: 27017
+      targetPort: 27017
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-customermanager-deployment
+  namespace: customermanager-k8s
+  labels:
+    app: mongodb-customermanager
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 2
+  selector:
+    matchLabels:
+      app: mongodb-customermanager
+  template:
+    metadata:
+      labels:
+        app: mongodb-customermanager
+    spec:
+      containers:
+      - name: mongodb-customermanager
+        image: mongo
+        ports:
+          - containerPort: 27017   
+        env:
+          - name: MONGO_INITDB_ROOT_USERNAME
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-customermanager-configmap
+                key: mongo-root-username
+          - name: MONGO_INITDB_ROOT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: mongodb-customermanager-secret
+                key: mongo-root-password
+        volumeMounts:
+          - mountPath: customermanager/data/db
+            name: mongo-customermanager-pv
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+      volumes:
+        - name: mongo-customermanager-pv
+          persistentVolumeClaim:
+            claimName: mongo-customermanager-pvc
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mongo-customermanager-pv
+  namespace: customermanager-k8s
+  labels:
+    app: mongodb-customermanager
+spec:
+  capacity:
+    storage: 20Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Recycle
+  storageClassName: standard
+  hostPath:
+    path: /mnt/k8s/mongo
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongo-customermanager-pvc
+  namespace: customermanager-k8s
+spec:
+  resources:
+    requests:
+      storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  selector:
+    matchLabels: 
+      app: mongodb-customermanager
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: customermanager-configmap
+  namespace: customermanager-k8s
+data:
+  security-jwt-clientid: CustomerManagerClient
+  security-jwt-accesstokenvaliditityseconds: "43200"
+  security-jwt-authorizedgranttypes: password,authorization_code,refresh_token,client_credentials
+  security-jwt-refreshtokenvalidityseconds: "2592000"
+  kafka-consumer-topic-name: shipmentevent
+  kafka-consumer-group-id: shipmentevent
+  admin-user-email: admin@customermanager.com
+  system-user-email: system@customermanager.com
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: customermanager-secret
+  namespace: customermanager-k8s
+type: Opaque
+stringData:
+  security-jwt-clientsecret: secret
+  security-jwt-signingkey: "123"
+  admin-user-password: admin123
+  system-user-password: system123
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: customermanager-service
+  namespace: customermanager-k8s
+  labels:
+     app: customermanager
+spec:
+  selector:
+    app: customermanager
+  type: LoadBalancer
+  ports:
+    - protocol: TCP
+      port: 8083
+      targetPort: 8083
+      nodePort: 32599
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customermanager-deployment
+  namespace: customermanager-k8s
+  labels:
+    app: customermanager
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: customermanager
+  template:
+    metadata:
+      labels:
+        app: customermanager
+    spec:
+      containers:
+      - name: customermanager
+        image: eftmk/customermanager:latest
+        imagePullPolicy: Never
+        ports:
+          - containerPort: 8083
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+        volumeMounts:
+          - mountPath: /mnt/k8s/log
+            name: customermanager-pv
+        env:
+          - name: CONFIG_MONGODB_USERNAME
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-customermanager-configmap
+                key: mongo-root-username
+          - name: CONFIG_MONGODB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: mongodb-customermanager-secret
+                key: mongo-root-password
+          - name: CONFIG_MONGODB_AUTH_DB
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-customermanager-configmap
+                key: mongo-root-authdb
+          - name: CONFIG_MONGODB_SERVER
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-customermanager-configmap
+                key: database_url
+          - name: CONFIG_MONGODB_AUTO_INDEX_CREATION
+            valueFrom:
+              configMapKeyRef:
+                name: mongodb-customermanager-configmap
+                key: auto-index-creation
+          - name: CONFIG_KAFKA_BOOTSTRAP_SERVERS
+            #value: kafka.default.svc.cluster.local:9092
+            value: fleet-management-kafka.default.svc.cluster.local:9092
+          - name: CONFIG_KAFKA_CONSUMER_TOPIC_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: customermanager-configmap
+                key: kafka-consumer-topic-name
+          - name: CONFIG_KAFKA_GROUP_ID
+            valueFrom:
+              configMapKeyRef:
+                name: customermanager-configmap
+                key: kafka-consumer-group-id
+          - name: CONFIG_SECURITY_JWT_CLIENTID
+            valueFrom:
+              configMapKeyRef:
+                name: customermanager-configmap
+                key: security-jwt-clientid
+          - name: CONFIG_SECURITY_JWT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: customermanager-secret
+                key: security-jwt-clientsecret
+          - name: CONFIG_SECURITY_JWT_SIGNINGKEY
+            valueFrom:
+              secretKeyRef:
+                name: customermanager-secret
+                key: security-jwt-signingkey
+          - name: CONFIG_SECURITY_JWT_ACCESSTOKEN_VALIDITYSECONDS
+            valueFrom:
+              configMapKeyRef:
+                name: customermanager-configmap
+                key: security-jwt-accesstokenvaliditityseconds
+          - name: CONFIG_SECURITY_JWT_AUTHORIZED_GRANTTYPES
+            valueFrom:
+              configMapKeyRef:
+                name: customermanager-configmap
+                key: security-jwt-authorizedgranttypes
+          - name: CONFIG_SECURITY_JWT_REFERSHTOKEN_VALIDITYSECONDS
+            valueFrom:
+              configMapKeyRef:
+                name: customermanager-configmap
+                key: security-jwt-refreshtokenvalidityseconds
+          - name: CONFIG_ADMIN_USER_EMAIL
+            valueFrom:
+              configMapKeyRef:
+                name: customermanager-configmap
+                key: admin-user-email
+          - name: CONFIG_ADMIN_USER_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: customermanager-secret
+                key: admin-user-password
+          - name: CONFIG_SYSTEM_USER_EMAIL
+            valueFrom:
+              configMapKeyRef:
+                name: customermanager-configmap
+                key: system-user-email
+          - name: CONFIG_SYSTEM_USER_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: customermanager-secret
+                key: system-user-password
+      volumes:
+        - name: customermanager-pv
+          persistentVolumeClaim:
+            claimName: customermanager-pvc
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: customermanager-pv
+  namespace: customermanager-k8s
+  labels:
+    app: customermanager
+spec:
+  capacity:
+    storage: 20Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Recycle
+  storageClassName: standard
+  hostPath:
+    path: /mnt/k8s/log
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: customermanager-pvc
+  namespace: customermanager-k8s
+spec:
+  resources:
+    requests:
+      storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  selector:
+    matchLabels: 
+      app: customermanager
