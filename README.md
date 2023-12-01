@@ -19,7 +19,8 @@ Redis,
 Resilience4j,
 Maven,
 Junit5, Mockito, Assertj,
-Kubernetes
+Kubernetes,
+Microservices
 
 # Rest API
 
